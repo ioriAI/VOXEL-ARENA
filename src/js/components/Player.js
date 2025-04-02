@@ -415,6 +415,36 @@ export class Player {
       
       // TODO: Add checks for collisions with ceiling (Y+) here
       // Consider player's height for ceiling checks.
+
+      // --- Vertical Collision (Ceiling Y+) ---
+      const playerTopY = this.position.y + this.height;
+      const ceilingVoxelY = Math.floor(playerTopY);
+      
+      // Ensure we are checking a valid voxel layer (and not above world height if known)
+      // Add a check against world height if available: && ceilingVoxelY < worldHeight
+      if (this.velocity.y > 0) { // Only check if moving upwards
+        const blockAbove = this.game.voxelWorld.getVoxel(x, ceilingVoxelY, z);
+        // The bottom surface coordinate of the ceiling voxel is simply ceilingVoxelY
+        const ceilingBottomSurfaceY = ceilingVoxelY;
+        
+        // Predict next vertical top position
+        const predictedTopY = playerTopY + this.velocity.y * deltaTime;
+
+        // Condition: A solid block exists above, player is moving up,
+        // and the player's *predicted* top position is at or above that block's bottom surface.
+        if (blockAbove !== 0 && predictedTopY >= ceilingBottomSurfaceY) {
+          // Collision Detected!
+          console.log(`Ceiling collision detected! PosY: ${this.position.y.toFixed(2)}, VelY: ${this.velocity.y.toFixed(2)}, CeilingY: ${ceilingBottomSurfaceY}`);
+          
+          // Snap position so the head is just below the ceiling
+          this.position.y = ceilingBottomSurfaceY - this.height;
+          this.velocity.y = 0; // Stop upward velocity immediately
+          
+          // Optional: apply negative restitution if you want a bounce down, but usually 0 is fine.
+          // this.velocity.y *= -this.groundRestitution; 
+        }
+      }
+      // --- End Vertical Collision (Ceiling) ---
     }
   }
   

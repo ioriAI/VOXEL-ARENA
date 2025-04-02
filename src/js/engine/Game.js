@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { VoxelWorld } from './VoxelWorld.js';
 import { Player } from '../components/Player.js';
+import { Bot } from '../components/bot.js';
 import { InputManager } from '../utils/InputManager.js';
 
 export class Game {
@@ -24,7 +26,9 @@ export class Game {
     // Componentes do jogo
     this.voxelWorld = null;
     this.player = null;
+    this.bot = null;
     this.inputManager = null;
+    this.gltfLoader = null;
     
     // Performance
     this.clock = new THREE.Clock();
@@ -69,9 +73,12 @@ export class Game {
     this._setupLight();
     this._setupWorld();
     this._setupPlayer();
-    this._setupControls();
+    this.inputManager = new InputManager();
+    this.inputManager.init();
     this._setupEventListeners();
     this._setupHighlightBox();
+    this._setupLoaders();
+    this._loadAssets();
     
     // Posiciona a câmera inicialmente (será atualizada a cada frame)
     this._updateCameraPosition();
@@ -258,16 +265,22 @@ export class Game {
     this.deltaTime = this.clock.getDelta();
     this._updateFPS();
     
-    // Atualiza componentes
-    this.player.update(this.deltaTime);
+    if (this.player) {
+      this.player.update(this.deltaTime);
+      this._updateCameraPosition();
+    }
     
-    // Atualiza a posição da câmera para seguir o jogador
-    this._updateCameraPosition();
+    if (this.bot) {
+      this.bot.update(this.deltaTime);
+    }
     
-    // Atualiza o raycaster para interação
+    // Check for player-bot collision AFTER their individual updates
+    this._checkPlayerBotCollision(); 
+
+    this._updateZoom();
+    
     this._updateRaycaster();
     
-    // Renderiza a cena
     this.renderer.render(this.scene, this.camera);
   }
   
@@ -325,5 +338,93 @@ export class Game {
     };
     
     return `${info.playerPos} | ${info.chunkInfo} | ${info.voxelsRendered} | ${info.zoom}`;
+  }
+  
+  _setupLoaders() {
+    this.gltfLoader = new GLTFLoader();
+  }
+
+  _loadAssets() {
+    this._loadBotModel();
+    // Load other assets here if needed
+  }
+
+  _loadBotModel() {
+    if (!this.gltfLoader) return;
+
+    const modelPath = 'assets/model/dragon.glb'; // Changed path to dragon model
+    this.gltfLoader.load(modelPath, 
+        (gltf) => {
+            console.log("Bot model (dragon) loaded successfully."); // Updated log message
+            const botModelScene = gltf.scene;
+            
+            // Define initial position for the bot (same as Player start)
+            const initialBotPos = new THREE.Vector3(32, 20, 32); // Use player start position
+            
+            // Instantiate the Bot class, passing the game instance and model
+            this.bot = new Bot(this, botModelScene, initialBotPos); // Pass 'this' (the Game instance)
+            
+            // Add the bot's mesh to the scene
+            this.scene.add(this.bot.mesh);
+            
+            // TODO: Implement physics/collision for the Bot if needed
+            // For now, it will just be static.
+            
+        },
+        (xhr) => {
+            // Optional: Progress callback
+            // console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+        },
+        (error) => {
+            console.error('Error loading bot model:', error);
+            console.error('Attempted to load from:', modelPath);
+        }
+    );
+  }
+
+  _checkPlayerBotCollision() {
+    if (!this.player || !this.bot) {
+      return; // Need both player and bot to check collision
+    }
+
+    const playerPos = this.player.position;
+    const botPos = this.bot.position;
+    const playerRadius = this.player.radius;
+    const botRadius = this.bot.radius;
+
+    // Calculate distance squared in the XZ plane (ignoring height)
+    const dx = playerPos.x - botPos.x;
+    const dz = playerPos.z - botPos.z;
+    const distSq = dx * dx + dz * dz;
+
+    const minDist = playerRadius + botRadius;
+    const minDistSq = minDist * minDist;
+
+    if (distSq < minDistSq && distSq > 0.001) { // Check if closer than combined radii (and not exactly at the same spot)
+      const dist = Math.sqrt(distSq);
+      const overlap = minDist - dist;
+
+      // Calculate the collision normal (direction from bot to player) in the XZ plane
+      const collisionNormalX = dx / dist;
+      const collisionNormalZ = dz / dist;
+
+      // Calculate how much each entity should be pushed back (half the overlap each)
+      const pushAmount = overlap * 0.5;
+      const playerPushX = collisionNormalX * pushAmount;
+      const playerPushZ = collisionNormalZ * pushAmount;
+
+      // Apply the push to both player and bot positions
+      this.player.position.x += playerPushX;
+      this.player.position.z += playerPushZ;
+
+      this.bot.position.x -= playerPushX; // Push bot in the opposite direction
+      this.bot.position.z -= playerPushZ;
+
+      // Ensure the mesh positions are updated after position correction
+      this.player._updateMesh(); 
+      this.bot._updateMesh();
+      
+      // console.log(`Collision Player-Bot! Overlap: ${overlap.toFixed(2)}`); // Debug log
+    }
   }
 } 
