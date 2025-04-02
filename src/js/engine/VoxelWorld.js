@@ -11,7 +11,7 @@ export class VoxelWorld {
     this.group = new THREE.Group();
     this.chunks = new Map(); // Map de chunks por coordenadas
     
-    // Material único para todos os voxels
+    // Material único para todos os voxels using vertex colors
     this.material = new THREE.MeshLambertMaterial({
       vertexColors: true,
     });
@@ -202,14 +202,18 @@ export class VoxelWorld {
   }
   
   _addVoxelFaces(chunk, x, y, z, voxelValue, positions, normals, uvs, indices, colors) {
-    // Define cores para diferentes tipos de voxels
+    // Define cores base para diferentes tipos de voxels
     const voxelColors = [
-      [0.5, 0.5, 0.5], // Tipo 0 (não usado)
-      [0.5, 0.5, 0.5], // Tipo 1 (pedra)
-      [0.4, 0.8, 0.4], // Tipo 2 (grama)
-      [0.8, 0.8, 0.4], // Tipo 3 (areia)
+      [0.5, 0.5, 0.5], // Tipo 0 (vazio) - Cinza médio (não renderizado, mas para segurança)
+      [0.6, 0.6, 0.6], // Tipo 1 (pedra) - Cinza claro
+      [0.3, 0.7, 0.3], // Tipo 2 (grama) - Verde base
+      [0.8, 0.7, 0.5], // Tipo 3 (areia) - Bege
+      // Adicione mais tipos aqui se necessário
     ];
     
+    // Pega a cor base para o tipo de voxel atual
+    const baseColor = voxelColors[voxelValue] || voxelColors[0]; // Default to type 0 color if value is invalid
+
     // Faces: direita, esquerda, cima, baixo, frente, trás
     const directions = [
       { x: 1, y: 0, z: 0, nx: 1, ny: 0, nz: 0 },  // direita
@@ -253,7 +257,7 @@ export class VoxelWorld {
           x, y, z,
           dir.nx, dir.ny, dir.nz,
           voxelValue,
-          voxelColors[voxelValue]
+          baseColor
         );
         
         // Adiciona os índices da face (2 triângulos)
@@ -265,7 +269,7 @@ export class VoxelWorld {
     }
   }
   
-  _addFaceVertices(positions, normals, uvs, colors, x, y, z, nx, ny, nz, voxelValue, voxelColor) {
+  _addFaceVertices(positions, normals, uvs, colors, x, y, z, nx, ny, nz, voxelValue, baseColor) {
     // Ajusta para o tamanho dos tiles
     const size = this.tileSize;
     
@@ -325,20 +329,32 @@ export class VoxelWorld {
     // Adiciona os vértices aos buffers
     for (const vertex of vertices) {
       // Posição (escalada pelo tamanho do tile)
-      positions.push(
-        vertex.pos[0] * size,
-        vertex.pos[1] * size,
-        vertex.pos[2] * size
-      );
+      const worldX = vertex.pos[0] * size;
+      const worldY = vertex.pos[1] * size;
+      const worldZ = vertex.pos[2] * size;
+      
+      positions.push(worldX, worldY, worldZ);
       
       // Normal
       normals.push(nx, ny, nz);
       
-      // UVs
+      // UVs (ainda adicionamos, podem ser úteis para outras coisas no futuro)
       uvs.push(vertex.uv[0], vertex.uv[1]);
       
-      // Cor
-      colors.push(voxelColor[0], voxelColor[1], voxelColor[2]);
+      // Cor (com variação para grama)
+      let r = baseColor[0];
+      let g = baseColor[1];
+      let b = baseColor[2];
+
+      if (voxelValue === 2) { // Se for grama (Tipo 2)
+        // Adiciona uma variação sutil baseada na posição mundial
+        // Usando uma função simples e pseudo-aleatória para variação
+        const variation = (Math.sin(worldX * 1.1 + worldZ * 0.7) * 0.5 + 0.5) * 0.1; // Variação entre 0 e 0.1
+        g = Math.max(0, Math.min(1, g + variation - 0.05)); // Varia o verde
+        r = Math.max(0, Math.min(1, r + variation * 0.5 - 0.025)); // Varia um pouco o vermelho/marrom
+      }
+      
+      colors.push(r, g, b);
     }
   }
   

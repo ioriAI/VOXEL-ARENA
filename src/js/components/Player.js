@@ -10,7 +10,8 @@ export class Player {
     this.jumpVelocity = 5; // Velocidade de pulo
     
     // Gravidade e física básica
-    this.gravity = 12;
+    this.gravity = 9.8; // Adjusted gravity
+    this.groundRestitution = 0.4; // Factor for bounce (-1 = full bounce, 0 = no bounce)
     this.onGround = false;
     
     // Para detecção de colisão
@@ -247,48 +248,173 @@ export class Player {
   }
   
   _applyPhysics(deltaTime) {
-    // Aplica gravidade
-    if (!this.onGround) {
-      this.velocity.y -= this.gravity * deltaTime;
-    }
+    // 1. Apply gravity
+    // Store previous onGround state before potentially changing it
+    const wasOnGround = this.onGround; 
+    this.velocity.y -= this.gravity * deltaTime;
     
-    // Limites de velocidade de queda
+    // 2. Limit fall speed
     if (this.velocity.y < -20) {
       this.velocity.y = -20;
     }
     
-    // Verifica colisão com o chão (simplificado por enquanto)
-    if (this.position.y <= 0) {
+    // 3. Check for collisions (including ground) which might modify velocity and position
+    this.onGround = false; // Assume not on ground until collision check confirms
+    this._checkVoxelCollisions(deltaTime); // Pass deltaTime
+                                // This method will set this.onGround if collision occurs
+                                // and handle position snapping + velocity bounce
+                                
+    // 4. Update position based on final velocity for this frame
+    this.position.x += this.velocity.x * deltaTime;
+    this.position.y += this.velocity.y * deltaTime; 
+    this.position.z += this.velocity.z * deltaTime;
+
+    // 5. Final safety check: Ensure player never goes below y=0
+    if (this.position.y < 0) {
+      console.warn("[Player] Position fell below y=0, clamping."); // Optional warning
       this.position.y = 0;
-      this.velocity.y = 0;
-      this.onGround = true;
+      if (this.velocity.y < 0) {
+        // Stop downward velocity if we hit the hard floor
+        // You might want a small bounce here too, similar to voxel collision
+        // this.velocity.y *= -this.groundRestitution; 
+        this.velocity.y = 0;
+      }
+      this.onGround = true; // If we hit y=0, we are definitely on ground.
     }
     
-    // Verifica colisão com voxels
-    this._checkVoxelCollisions();
-    
-    // Atualiza a posição com base na velocidade
-    this.position.x += this.velocity.x * deltaTime;
-    this.position.y += this.velocity.y * deltaTime;
-    this.position.z += this.velocity.z * deltaTime;
+    // Note: If a ground collision occurred in _checkVoxelCollisions, 
+    // this.position.y was snapped to the ground level (e.g., y), 
+    // and this.velocity.y was reversed and dampened.
+    // The position update here will then move the player slightly *up* from the ground
+    // starting the bounce.
   }
   
-  _checkVoxelCollisions() {
+  _checkVoxelCollisions(deltaTime) { // Accept deltaTime
     // Verificação de colisão simples (a ser expandida)
     if (this.game.voxelWorld) {
       const x = Math.floor(this.position.x);
-      const y = Math.floor(this.position.y);
+      const currentVoxelY = Math.floor(this.position.y); // Voxel index player's base is in
       const z = Math.floor(this.position.z);
-      
-      // Verificar colisão com blocos abaixo dos pés
-      if (y > 0) {
-        // Se houver um bloco abaixo e o jogador estiver caindo
-        if (this.game.voxelWorld.getVoxel(x, y - 1, z) !== 0 && this.velocity.y <= 0) {
-          this.position.y = y;
-          this.velocity.y = 0;
-          this.onGround = true;
+
+      // --- Vertical Collision (Ground) ---
+      // Check the voxel index directly below the player
+      const belowVoxelY = currentVoxelY - 1; 
+
+      // Ensure we are checking a valid voxel index (>= 0)
+      if (belowVoxelY >= 0) {
+        const blockBelow = this.game.voxelWorld.getVoxel(x, belowVoxelY, z);
+        // The top surface coordinate of the voxel at index belowVoxelY is belowVoxelY + 1
+        const groundSurfaceY = belowVoxelY + 1; 
+
+        // Predict next vertical position
+        const predictedY = this.position.y + this.velocity.y * deltaTime;
+
+        // Condition: A solid block exists below, player is moving down (or stationary),
+        // and the player's *predicted* base position is at or below that block's top surface.
+        if (blockBelow !== 0 && this.velocity.y <= 0 && predictedY <= groundSurfaceY) {
+          // Collision Detected!
+          console.log(`Ground collision detected! PosY: ${this.position.y.toFixed(2)}, VelY: ${this.velocity.y.toFixed(2)}, GroundY: ${groundSurfaceY}`);
+          
+          // Always snap position and apply bounce
+          this.position.y = groundSurfaceY; // Snap position exactly to the ground surface
+          this.velocity.y *= -this.groundRestitution; // Reverse and dampen vertical velocity (bounce)
+
+          // Prevent tiny bounce velocity from keeping player "in air" indefinitely
+          if (Math.abs(this.velocity.y) < 0.1) {
+              this.velocity.y = 0;
+          }
+          
+          this.onGround = true; // Mark player as on ground
         }
       }
+      // --- End Vertical Collision (Ground) ---
+
+      // --- Horizontal Collision (X-Axis) ---
+      const predictedX = this.position.x + this.velocity.x * deltaTime;
+      const playerLeftEdge = predictedX - this.radius;
+      const playerRightEdge = predictedX + this.radius;
+      
+      // Check collision when moving right (positive velocity)
+      if (this.velocity.x > 0) {
+          const collisionX = Math.floor(playerRightEdge);
+          // Check voxels along player's full height
+          const topVoxelY = Math.floor(this.position.y + this.height - 0.001);
+          for (let yCheck = currentVoxelY; yCheck <= topVoxelY; yCheck++) {
+              // Ensure we don't check below y=0 if player base is somehow negative (safety)
+              if (yCheck < 0) continue; 
+              const wallVoxel = this.game.voxelWorld.getVoxel(collisionX, yCheck, z);
+              if (wallVoxel !== 0) {
+                  // Collision detected at this height
+                  console.log(`X+ collision detected! VoxelX: ${collisionX}, VoxelY: ${yCheck}`);
+                  this.position.x = collisionX - this.radius; // Snap right edge exactly to wall boundary
+                  this.velocity.x = 0; // Stop horizontal movement
+                  break; // Exit loop once collision is found
+              }
+          }
+      }
+      // Check collision when moving left (negative velocity)
+      else if (this.velocity.x < 0) {
+          const collisionX = Math.floor(playerLeftEdge);
+          // Check voxels along player's full height
+          const topVoxelY = Math.floor(this.position.y + this.height - 0.001);
+          for (let yCheck = currentVoxelY; yCheck <= topVoxelY; yCheck++) {
+              // Ensure we don't check below y=0 if player base is somehow negative (safety)
+              if (yCheck < 0) continue; 
+              const wallVoxel = this.game.voxelWorld.getVoxel(collisionX, yCheck, z);
+              if (wallVoxel !== 0) {
+                  // Collision detected at this height
+                  console.log(`X- collision detected! VoxelX: ${collisionX}, VoxelY: ${yCheck}`);
+                  this.position.x = collisionX + 1 + this.radius; // Snap left edge exactly to wall boundary
+                  this.velocity.x = 0; // Stop horizontal movement
+                  break; // Exit loop once collision is found
+              }
+          }
+      }
+      // --- End Horizontal Collision (X-Axis) ---
+
+      // --- Horizontal Collision (Z-Axis) ---
+      const predictedZ = this.position.z + this.velocity.z * deltaTime;
+      const playerFrontEdge = predictedZ + this.radius; // Assuming +Z is forward relative to player model/world
+      const playerBackEdge = predictedZ - this.radius;  // Assuming -Z is backward
+
+      // Check collision when moving forward (+Z velocity)
+      if (this.velocity.z > 0) {
+          const collisionZ = Math.floor(playerFrontEdge);
+          // Check voxels along player's full height
+          const topVoxelY = Math.floor(this.position.y + this.height - 0.001);
+          for (let yCheck = currentVoxelY; yCheck <= topVoxelY; yCheck++) {
+              if (yCheck < 0) continue;
+              const wallVoxel = this.game.voxelWorld.getVoxel(x, yCheck, collisionZ);
+              if (wallVoxel !== 0) {
+                  // Collision detected at this height
+                  console.log(`Z+ collision detected! VoxelZ: ${collisionZ}, VoxelY: ${yCheck}`);
+                  this.position.z = collisionZ - this.radius; // Snap front edge exactly to wall boundary
+                  this.velocity.z = 0; // Stop forward movement
+                  break; // Exit loop once collision is found
+              }
+          }
+      }
+      // Check collision when moving backward (-Z velocity)
+      else if (this.velocity.z < 0) {
+          const collisionZ = Math.floor(playerBackEdge);
+          // Check voxels along player's full height
+          const topVoxelY = Math.floor(this.position.y + this.height - 0.001);
+          for (let yCheck = currentVoxelY; yCheck <= topVoxelY; yCheck++) {
+              if (yCheck < 0) continue;
+              const wallVoxel = this.game.voxelWorld.getVoxel(x, yCheck, collisionZ);
+              if (wallVoxel !== 0) {
+                  // Collision detected at this height
+                  console.log(`Z- collision detected! VoxelZ: ${collisionZ}, VoxelY: ${yCheck}`);
+                  this.position.z = collisionZ + 1 + this.radius; // Snap back edge exactly to wall boundary
+                  this.velocity.z = 0; // Stop backward movement
+                  break; // Exit loop once collision is found
+              }
+          }
+      }
+      // --- End Horizontal Collision (Z-Axis) ---
+      
+      // TODO: Add checks for collisions with ceiling (Y+) here
+      // Consider player's height for ceiling checks.
     }
   }
   
